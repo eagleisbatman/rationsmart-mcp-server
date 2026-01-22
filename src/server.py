@@ -1,14 +1,18 @@
 """RationSmart MCP Server - AI-powered cow diet management."""
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
+from starlette.requests import Request
 
 from src.client import get_client, close_client
 
@@ -521,24 +525,90 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Error: {e}")]
 
 
-async def run_server():
-    """Run the MCP server."""
-    logger.info("Starting RationSmart MCP Server...")
+async def health_check(request: Request) -> JSONResponse:
+    """Health check endpoint."""
+    return JSONResponse({"status": "ok", "service": "rationsmart-mcp"})
 
-    async with stdio_server() as (read_stream, write_stream):
-        try:
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
+
+async def list_tools_endpoint(request: Request) -> JSONResponse:
+    """List all available tools."""
+    tools_data = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "inputSchema": tool.inputSchema,
+        }
+        for tool in TOOLS
+    ]
+    return JSONResponse({"tools": tools_data})
+
+
+async def call_tool_endpoint(request: Request) -> JSONResponse:
+    """Call a tool with given arguments."""
+    try:
+        body = await request.json()
+        tool_name = body.get("name")
+        arguments = body.get("arguments", {})
+
+        if not tool_name:
+            return JSONResponse(
+                {"error": "Missing 'name' field"},
+                status_code=400,
             )
-        finally:
-            await close_client()
+
+        # Call the tool
+        result = await call_tool(tool_name, arguments)
+
+        # Extract text content from result
+        if result and len(result) > 0:
+            return JSONResponse({
+                "success": True,
+                "result": result[0].text if hasattr(result[0], 'text') else str(result[0]),
+            })
+        else:
+            return JSONResponse({
+                "success": True,
+                "result": "No response",
+            })
+
+    except json.JSONDecodeError:
+        return JSONResponse(
+            {"error": "Invalid JSON body"},
+            status_code=400,
+        )
+    except Exception as e:
+        logger.error(f"Tool call failed: {e}")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
+
+
+# Create Starlette app with routes
+app = Starlette(
+    debug=False,
+    routes=[
+        Route("/", health_check, methods=["GET"]),
+        Route("/health", health_check, methods=["GET"]),
+        Route("/tools", list_tools_endpoint, methods=["GET"]),
+        Route("/tools/call", call_tool_endpoint, methods=["POST"]),
+    ],
+)
 
 
 def main():
     """Entry point for the MCP server."""
-    asyncio.run(run_server())
+    import uvicorn
+
+    port = int(os.getenv("PORT", "8080"))
+    logger.info(f"Starting RationSmart MCP Server on port {port}...")
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+    )
 
 
 if __name__ == "__main__":

@@ -12,5 +12,8 @@ COPY src/ ./src/
 # Set Python path
 ENV PYTHONPATH=/app
 
-# Run the MCP server
+# Expose port
+EXPOSE 8080
+
+# Run the server
 CMD ["python", "-m", "src.server"]
