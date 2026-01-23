@@ -194,20 +194,20 @@ class RationSmartClient:
 
         # 3. Build cattle_info from cow profile
         # Use target_milk_yield if set, otherwise use current milk_production
-        milk_yield = cow.get("milk_production", 10)
+        milk_yield = cow.get("milk_production") or 10
         if cow.get("target_milk_yield"):
             milk_yield = cow["target_milk_yield"]
 
         cattle_info = {
-            "body_weight": cow.get("body_weight", 400),
-            "breed": cow.get("breed", ""),
-            "lactating": cow.get("lactating", True),
+            "body_weight": cow.get("body_weight") or 400,
+            "breed": cow.get("breed") or "Unknown",
+            "lactating": cow.get("lactating") if cow.get("lactating") is not None else True,
             "milk_production": milk_yield,
-            "days_in_milk": cow.get("days_in_milk", 100),
-            "parity": cow.get("parity", 2),
-            "days_of_pregnancy": cow.get("days_of_pregnancy", 0),
-            "tp_milk": cow.get("milk_protein_percent", 3.5),
-            "fat_milk": cow.get("milk_fat_percent", 4.0),
+            "days_in_milk": cow.get("days_in_milk") or 100,
+            "parity": cow.get("parity") or 2,
+            "days_of_pregnancy": cow.get("days_of_pregnancy") or 0,
+            "tp_milk": cow.get("milk_protein_percent") or 3.5,
+            "fat_milk": cow.get("milk_fat_percent") or 4.0,
             "temperature": 25,
             "topography": "Flat",
             "distance": 1,
