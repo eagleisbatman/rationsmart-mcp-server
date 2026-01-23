@@ -575,7 +575,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 status = "Lactating" if cow.get("lactating") else "Dry"
                 milk = f"{cow.get('milk_production', 0)} L/day" if cow.get("lactating") else "N/A"
                 lines.append(
-                    f"- {cow['name']} (ID: {cow['id'][:8]}...)\n"
+                    f"- {cow['name']} (ID: {cow['id']})\n"
                     f"  Breed: {cow.get('breed', 'Unknown')} | {status} | Milk: {milk}"
                 )
             return [TextContent(type="text", text="\n".join(lines))]
@@ -696,7 +696,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 lines.append(f"\nDaily Cost: {currency} {cost:.2f}")
 
             if diet_id:
-                lines.append(f"\nDiet saved (ID: {diet_id[:8]}...)")
+                lines.append(f"\nDiet saved (ID: {diet_id})")
                 lines.append("Use 'rationsmart.diets.follow' to start following this diet.")
 
             return [TextContent(type="text", text="\n".join(lines))]
@@ -745,7 +745,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 active = " (ACTIVE)" if d.get("is_active") else ""
                 cost = d.get("total_cost_per_day")
                 cost_str = f", {d.get('currency', 'INR')} {cost:.2f}/day" if cost else ""
-                lines.append(f"- {d.get('name', 'Unnamed')}{active}\n  ID: {d['id'][:8]}...{cost_str}")
+                lines.append(f"- {d.get('name', 'Unnamed')}{active}\n  ID: {d['id']}{cost_str}")
             return [TextContent(type="text", text="\n".join(lines))]
 
         elif name == "rationsmart.diets.follow":
