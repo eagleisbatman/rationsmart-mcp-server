@@ -36,7 +36,7 @@ class RationSmartClient:
             "Accept": "application/json",
         }
         if self.config.api_key:
-            headers["X-API-Key"] = self.config.api_key
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
         return headers
 
     async def close(self):
@@ -48,6 +48,13 @@ class RationSmartClient:
     async def get_countries(self) -> list[dict[str, Any]]:
         """Get all available countries."""
         response = await self._client.get("/auth/countries")
+        response.raise_for_status()
+        return response.json()
+
+    async def resolve_location(self, latitude: float, longitude: float) -> dict[str, Any]:
+        """Resolve location from latitude/longitude via backend."""
+        payload = {"latitude": latitude, "longitude": longitude}
+        response = await self._client.post("/onboarding/location", json=payload)
         response.raise_for_status()
         return response.json()
 
