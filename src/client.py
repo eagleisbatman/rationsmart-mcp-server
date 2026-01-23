@@ -137,7 +137,7 @@ class RationSmartClient:
 
     async def get_feeds(self, country_id: str) -> list[dict[str, Any]]:
         """Get all feeds for a country."""
-        response = await self._client.get(f"/feeds/master-feeds/{country_id}")
+        response = await self._client.get("/master-feeds/", params={"country_id": country_id})
         response.raise_for_status()
         return response.json()
 
