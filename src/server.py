@@ -46,23 +46,6 @@ COUNTRY_CODE_OVERRIDES = {
 
 SERVER_INFO = {"name": "RationSmart Tools", "version": "0.1.0"}
 
-TOOL_ALIASES = {
-    "get_countries": "rationsmart.countries.list",
-    "get_breeds": "rationsmart.breeds.list",
-    "resolve_location": "rationsmart.location.resolve",
-    "resolve_country_id": "rationsmart.countries.resolve",
-    "create_cow": "rationsmart.cows.create",
-    "list_cows": "rationsmart.cows.list",
-    "get_cow": "rationsmart.cows.get",
-    "update_cow": "rationsmart.cows.update",
-    "delete_cow": "rationsmart.cows.delete",
-    "generate_diet": "rationsmart.diets.generate",
-    "get_diet_schedule": "rationsmart.diets.schedule.get",
-    "get_diet_history": "rationsmart.diets.history.list",
-    "follow_diet": "rationsmart.diets.follow",
-    "stop_following_diet": "rationsmart.diets.unfollow",
-}
-
 TOOL_TITLES = {
     "rationsmart.countries.list": "List Countries",
     "rationsmart.breeds.list": "List Breeds",
@@ -97,6 +80,7 @@ TOOLS = [
             "type": "object",
             "properties": {},
             "required": [],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -116,6 +100,7 @@ TOOLS = [
                 },
             },
             "required": ["country_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -133,6 +118,7 @@ TOOLS = [
                 "longitude": {"type": "number", "description": "Longitude"},
             },
             "required": ["latitude", "longitude"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -152,6 +138,7 @@ TOOLS = [
                 "longitude": {"type": "number", "description": "Longitude"},
             },
             "required": [],
+            "additionalProperties": False,
         },
     ),
     # Cow tools
@@ -214,6 +201,7 @@ TOOLS = [
                 },
             },
             "required": ["device_id", "name"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -233,6 +221,7 @@ TOOLS = [
                 },
             },
             "required": ["device_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -256,6 +245,7 @@ TOOLS = [
                 },
             },
             "required": ["device_id", "cow_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -281,6 +271,7 @@ TOOLS = [
                 "days_of_pregnancy": {"type": "integer"},
             },
             "required": ["device_id", "cow_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -299,6 +290,7 @@ TOOLS = [
                 "permanent": {"type": "boolean", "description": "Permanently delete?", "default": False},
             },
             "required": ["device_id", "cow_id"],
+            "additionalProperties": False,
         },
     ),
     # Diet tools
@@ -323,6 +315,7 @@ TOOLS = [
                 "save_diet": {"type": "boolean", "description": "Save for later reference", "default": True},
             },
             "required": ["device_id", "cow_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -340,6 +333,7 @@ TOOLS = [
                 "cow_id": {"type": "string", "description": "The cow's unique ID"},
             },
             "required": ["device_id", "cow_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -357,6 +351,7 @@ TOOLS = [
                 "cow_id": {"type": "string", "description": "Optional: filter to specific cow"},
             },
             "required": ["device_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -374,6 +369,7 @@ TOOLS = [
                 "diet_id": {"type": "string", "description": "The diet's unique ID"},
             },
             "required": ["device_id", "diet_id"],
+            "additionalProperties": False,
         },
     ),
     Tool(
@@ -391,6 +387,7 @@ TOOLS = [
                 "diet_id": {"type": "string", "description": "The diet's unique ID"},
             },
             "required": ["device_id", "diet_id"],
+            "additionalProperties": False,
         },
     ),
 ]
@@ -473,7 +470,6 @@ async def _resolve_country_id(
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
     client = get_client()
-    name = TOOL_ALIASES.get(name, name)
 
     try:
         # ========== User/Setup Tools ==========
