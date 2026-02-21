@@ -104,6 +104,16 @@ export interface DietHistoryEntry {
   created_at: string;
 }
 
+export interface TelegramUser {
+  id: string;
+  telegram_id: string;
+  telegram_username?: string;
+  telegram_first_name?: string;
+  country_id?: string;
+  language_code?: string;
+  user_id?: string | null;
+}
+
 export interface RationSmartClientConfig {
   baseUrl: string;
   apiKey: string;
@@ -246,6 +256,28 @@ export class RationSmartClient {
       }
     }
     return null;
+  }
+
+  // ---- User (telegram_users upsert — identity bridge) ----
+
+  /**
+   * Ensure a user exists in RationSmart's telegram_users table.
+   * Idempotent: creates on first call, updates on subsequent calls.
+   * Uses telegram_username = "FarmerChat" to identify the source channel.
+   */
+  async ensureUser(params: {
+    deviceId: string;
+    name?: string;
+    countryId?: string;
+    language?: string;
+  }): Promise<TelegramUser> {
+    return this.request<TelegramUser>('POST', '/telegram-users/', {
+      telegram_id: params.deviceId,
+      telegram_username: 'FarmerChat',
+      telegram_first_name: params.name || 'Farmer',
+      ...(params.countryId ? { country_id: params.countryId } : {}),
+      ...(params.language ? { language_code: params.language } : {}),
+    });
   }
 
   // ---- Breeds ----

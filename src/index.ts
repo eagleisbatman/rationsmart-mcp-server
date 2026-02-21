@@ -136,6 +136,7 @@ app.get('/', (_req, res) => {
     description: 'Dairy cattle nutrition optimization — cow profiles, breed selection, and diet generation',
     endpoints: { health: '/health', mcp: '/mcp (POST)' },
     tools: [
+      { name: 'rationsmart.user.ensure', description: 'Ensure user account exists in RationSmart' },
       { name: 'rationsmart.countries.resolve', description: 'Resolve country from name or coordinates' },
       { name: 'rationsmart.breeds.list', description: 'List cattle breeds for a country' },
       { name: 'rationsmart.cows.list', description: 'List user cow profiles' },
@@ -194,6 +195,48 @@ app.post('/mcp', authenticateMcp, async (req, res) => {
       version: '1.0.0',
       description: 'Dairy cattle nutrition optimization — cow profiles, breed selection, and diet generation',
     });
+
+    // =========================================================
+    // TOOL 0: rationsmart.user.ensure
+    // =========================================================
+
+    server.registerTool(
+      'rationsmart.user.ensure',
+      {
+        title: 'Ensure User',
+        description: `Ensure a user account exists in RationSmart for this device.
+TRIGGERS: Internal — called at the start of the feed flow.
+RETURNS: Confirmation that the user exists.
+COVERAGE: All users.`,
+        inputSchema: z.object({
+          device_id: z.string().min(1).describe('GAP device ID identifying the user'),
+          name: z.string().optional().describe('User display name (defaults to "Farmer")'),
+          country_id: z.string().optional().describe('Country UUID from rationsmart.countries.resolve'),
+          language: z.string().optional().describe('Language code (e.g., "en", "hi", "am")'),
+        }).strict(),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async (input) => {
+        try {
+          logger.info('rationsmart.user.ensure called', { device_id: input.device_id });
+
+          if (!client) return errorResponse('Feed service is not configured.');
+
+          const user = await client.ensureUser({
+            deviceId: input.device_id,
+            name: input.name,
+            countryId: input.country_id,
+            language: input.language,
+          });
+
+          return textResponse(`User ensured (ID: ${user.id}) for device ${input.device_id}`);
+        } catch (error: unknown) {
+          // Non-fatal: log and continue — the flow can still work without this
+          logger.error('Error in rationsmart.user.ensure', { error: error instanceof Error ? error.message : String(error) });
+          return errorResponse(`Could not ensure user account. ${error instanceof Error ? error.message : 'Try again in a moment.'}`);
+        }
+      },
+    );
 
     // =========================================================
     // TOOL 1: rationsmart.countries.resolve
@@ -559,6 +602,7 @@ const httpServer = app.listen(Number(PORT), HOST, () => {
     version: '1.0.0',
     apiConfigured: !!(RATIONSMART_API_URL && RATIONSMART_API_KEY),
     tools: [
+      'rationsmart.user.ensure',
       'rationsmart.countries.resolve',
       'rationsmart.breeds.list',
       'rationsmart.cows.list',
