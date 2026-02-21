@@ -197,7 +197,7 @@ app.post('/mcp', authenticateMcp, async (req, res) => {
     });
 
     // =========================================================
-    // TOOL 0: rationsmart.user.ensure
+    // TOOL 10: rationsmart.user.ensure
     // =========================================================
 
     server.registerTool(
@@ -210,9 +210,9 @@ RETURNS: Confirmation that the user exists.
 COVERAGE: All users.`,
         inputSchema: z.object({
           device_id: z.string().min(1).describe('GAP device ID identifying the user'),
-          name: z.string().optional().describe('User display name (defaults to "Farmer")'),
+          name: z.string().max(100).optional().describe('User display name (defaults to "Farmer")'),
           country_id: z.string().optional().describe('Country UUID from rationsmart.countries.resolve'),
-          language: z.string().optional().describe('Language code (e.g., "en", "hi", "am")'),
+          language: z.string().max(10).optional().describe('Language code (e.g., "en", "hi", "am")'),
         }).strict(),
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
@@ -222,14 +222,24 @@ COVERAGE: All users.`,
 
           if (!client) return errorResponse('Feed service is not configured.');
 
+          // Sanitize name: strip HTML, control chars, bidi overrides
+          const sanitizedName = input.name
+            ? input.name
+                .replace(/<[^>]*>/g, '')
+                .replace(/[\x00-\x1f\x7f]/g, '')
+                .replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, '')
+                .trim()
+                .slice(0, 100) || 'Farmer'
+            : undefined;
+
           const user = await client.ensureUser({
             deviceId: input.device_id,
-            name: input.name,
+            name: sanitizedName,
             countryId: input.country_id,
             language: input.language,
           });
 
-          return textResponse(`User ensured (ID: ${user.id}) for device ${input.device_id}`);
+          return textResponse(`User ensured (ID: ${user.id})`);
         } catch (error: unknown) {
           // Non-fatal: log and continue — the flow can still work without this
           logger.error('Error in rationsmart.user.ensure', { error: error instanceof Error ? error.message : String(error) });
