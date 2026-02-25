@@ -7,6 +7,7 @@
  */
 
 import fetch from 'node-fetch';
+import { randomUUID } from 'crypto';
 
 // ===========================================
 // Types
@@ -177,7 +178,16 @@ export class RationSmartClient {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`API error (${response.status}): ${errorText || response.statusText}`);
+        // Use process.stderr so it is captured in structured JSON log format by the server
+        process.stderr.write(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: 'error',
+          service: 'rationsmart-client',
+          message: `API error (${response.status})`,
+          path,
+          detail: errorText.slice(0, 500),
+        }) + '\n');
+        throw new Error(`RationSmart API error (${response.status})`);
       }
 
       return (await response.json()) as T;
@@ -230,8 +240,20 @@ export class RationSmartClient {
       }
     }
 
-    // Fallback: return first active country
+    // Fallback: return first active country.
+    // This means the user's location or country name did not match any supported country.
+    // Log a warning so this can be detected and the country catalog can be extended.
     const fallback = countries[0];
+    process.stderr.write(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      service: 'rationsmart-client',
+      message: 'resolveCountry: no match found, falling back to first active country',
+      requestedName: params.country_name ?? null,
+      lat: params.latitude ?? null,
+      lon: params.longitude ?? null,
+      fallbackCountry: fallback.name,
+    }) + '\n');
     return { country_id: fallback.id, country_name: fallback.name, currency: fallback.currency };
   }
 
@@ -335,11 +357,17 @@ export class RationSmartClient {
     countryId: string,
     deviceId: string,
   ): Promise<{ dietId: string; summary: string; totalCost: number; currency: string; feeds: { name: string; quantity_kg: number; cost: number }[] }> {
-    // Step 1: Fetch cow profile
-    const cow = await this.getCow(cowId);
+    // Steps 1 & 2: Fetch cow profile and feed catalog in parallel — they are independent
+    const [cow, feeds] = await Promise.all([
+      this.getCow(cowId),
+      this.getFeeds(countryId),
+    ]);
 
-    // Step 2: Fetch available feeds for the country
-    const feeds = await this.getFeeds(countryId);
+    // Verify ownership — cow must belong to the requesting device
+    if (cow.telegram_user_id !== deviceId) {
+      throw new Error('Cow not found or access denied');
+    }
+
     if (!feeds || feeds.length === 0) {
       throw new Error('No feed catalog found for this country');
     }
@@ -370,7 +398,7 @@ export class RationSmartClient {
     }));
 
     // Step 5: Call optimizer (longer timeout — NSGA-III can be slow)
-    const simulationId = `mcp-${Date.now()}`;
+    const simulationId = `mcp-${randomUUID()}`;
     const optimizerResult = await this.request<Record<string, unknown>>(
       'POST',
       '/animal/diet-recommendation-working/',
@@ -465,6 +493,18 @@ export class RationSmartClient {
           });
         }
       }
+    } else {
+      // The optimizer returned a response shape we don't recognise.
+      // Log the top-level keys so the response format can be diagnosed.
+      const topKeys = Object.keys(result).join(', ');
+      process.stderr.write(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        service: 'rationsmart-client',
+        message: 'parseDietFeeds: unrecognised optimizer response shape — feed_results/feeds/diet_results not found',
+        topLevelKeys: topKeys,
+        solutionKeys: solution ? Object.keys(solution as object).join(', ') : 'none',
+      }) + '\n');
     }
 
     return parsed;
@@ -472,7 +512,40 @@ export class RationSmartClient {
 
   // ---- Diet Follow-up ----
 
+  /**
+   * Fetch a single diet history entry by ID.
+   * Used to verify ownership before mutating operations.
+   */
+  private async getDietById(dietId: string): Promise<DietHistoryEntry & { telegram_user_id?: string }> {
+    return this.request<DietHistoryEntry & { telegram_user_id?: string }>(
+      'GET',
+      `/bot-diet-history/${encodeURIComponent(dietId)}`,
+    );
+  }
+
+  /**
+   * Verify that a diet belongs to the requesting device.
+   * Falls back to cow-profile ownership check when telegram_user_id is not on the diet record.
+   */
+  private async verifyDietOwnership(deviceId: string, dietId: string): Promise<void> {
+    const diet = await this.getDietById(dietId);
+    // Prefer direct telegram_user_id on the diet entry if the API returns it
+    if (diet.telegram_user_id !== undefined) {
+      if (diet.telegram_user_id !== deviceId) {
+        throw new Error('Diet not found or access denied');
+      }
+      return;
+    }
+    // Fallback: verify via the associated cow's owner
+    const cow = await this.getCow(diet.cow_profile_id);
+    if (cow.telegram_user_id !== deviceId) {
+      throw new Error('Diet not found or access denied');
+    }
+  }
+
   async followDiet(deviceId: string, dietId: string): Promise<string> {
+    await this.verifyDietOwnership(deviceId, dietId);
+
     // Update the diet history entry to status='following', is_active=true
     await this.request<Record<string, unknown>>(
       'PUT',
@@ -502,6 +575,8 @@ export class RationSmartClient {
   }
 
   async unfollowDiet(deviceId: string, dietId: string): Promise<string> {
+    await this.verifyDietOwnership(deviceId, dietId);
+
     // Mark diet as archived
     await this.request<Record<string, unknown>>(
       'PUT',
