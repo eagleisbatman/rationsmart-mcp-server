@@ -217,7 +217,7 @@ export class RationSmartClient {
     country_name?: string;
     latitude?: number;
     longitude?: number;
-  }): Promise<{ country_id: string; country_name: string; currency: string } | null> {
+  }): Promise<{ country_id: string; country_name: string; currency: string; isFallback?: boolean } | null> {
     const countries = await this.getCountries();
     if (countries.length === 0) return null;
 
@@ -254,7 +254,7 @@ export class RationSmartClient {
       lon: params.longitude ?? null,
       fallbackCountry: fallback.name,
     }) + '\n');
-    return { country_id: fallback.id, country_name: fallback.name, currency: fallback.currency };
+    return { country_id: fallback.id, country_name: fallback.name, currency: fallback.currency, isFallback: true };
   }
 
   private geoResolveCountry(countries: Country[], lat: number, lon: number): Country | null {
@@ -356,6 +356,7 @@ export class RationSmartClient {
     cowId: string,
     countryId: string,
     deviceId: string,
+    _constraints?: { maxDailyCost?: number; optimizationTarget?: string; excludeFeeds?: string[] },
   ): Promise<{ dietId: string; summary: string; totalCost: number; currency: string; feeds: { name: string; quantity_kg: number; cost: number }[] }> {
     // Steps 1 & 2: Fetch cow profile and feed catalog in parallel — they are independent
     const [cow, feeds] = await Promise.all([
@@ -654,5 +655,81 @@ export class RationSmartClient {
     });
 
     return `Diet history:\n${lines.join('\n')}`;
+  }
+
+  /**
+   * Update an existing cow profile.
+   */
+  async updateCow(cowId: string, deviceId: string, updates: Partial<{
+    name: string;
+    breed: string;
+    body_weight: number;
+    milk_production: number;
+    lactating: boolean;
+    days_of_pregnancy: number;
+  }>): Promise<CowProfile> {
+    return this.request<CowProfile>(
+      'PUT',
+      `/bot-cows/${encodeURIComponent(cowId)}?telegram_user_id=${encodeURIComponent(deviceId)}`,
+      updates,
+    );
+  }
+
+  /**
+   * Soft-delete a cow profile (ownership-checked).
+   */
+  async deleteCow(cowId: string, deviceId: string): Promise<void> {
+    // Ownership check first
+    const cow = await this.getCow(cowId);
+    if (cow.telegram_user_id !== deviceId) {
+      throw new Error('Cow not found or access denied');
+    }
+    await this.request<unknown>(
+      'PUT',
+      `/bot-cows/${encodeURIComponent(cowId)}?telegram_user_id=${encodeURIComponent(deviceId)}`,
+      { is_active: false },
+    );
+  }
+
+  /**
+   * Regenerate a diet with modifications (exclude feeds, cost constraints).
+   */
+  async regenerateDiet(
+    cowId: string,
+    countryId: string,
+    deviceId: string,
+    options: {
+      excludeFeeds?: string[];
+      maxDailyCost?: number;
+      optimizationTarget?: string;
+    },
+  ): Promise<{ dietId: string; summary: string }> {
+    return this.generateDiet(cowId, countryId, deviceId, options);
+  }
+
+  /**
+   * List follow-up check-ins that are due.
+   */
+  async listDueFollowUps(): Promise<Array<{ id: string; deviceId: string; dietId: string; scheduledAt: string }>> {
+    const resp = await this.request<{ follow_ups: Array<{ id: string; telegram_user_id: string; diet_id: string; scheduled_at: string }> }>(
+      'GET',
+      '/bot-follow-ups/due',
+    );
+    return (resp.follow_ups || []).map(f => ({
+      id: f.id,
+      deviceId: f.telegram_user_id,
+      dietId: f.diet_id,
+      scheduledAt: f.scheduled_at,
+    }));
+  }
+
+  /**
+   * Mark a follow-up check-in as completed.
+   */
+  async completeFollowUp(followUpId: string): Promise<void> {
+    await this.request<unknown>(
+      'PUT',
+      `/bot-follow-ups/${encodeURIComponent(followUpId)}/complete`,
+    );
   }
 }

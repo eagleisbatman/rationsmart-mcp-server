@@ -289,13 +289,20 @@ const ListHistoryInputSchema = z.object({
 }).strict();
 
 // ===========================================
-// Singleton McpServer — created once at module level
+// McpServer factory — creates a fresh instance per request
+// to avoid "Already connected to a transport" errors.
 // ===========================================
-const mcpServer = new McpServer({
-  name: 'rationsmart-feed-formulation',
-  version: '1.0.0',
-  description: 'Dairy cattle nutrition optimization — cow profiles, breed selection, and diet generation',
-});
+function createMcpServer(): InstanceType<typeof McpServer> {
+  const server = new McpServer({
+    name: 'rationsmart-feed-formulation',
+    version: '1.0.0',
+    description: 'Dairy cattle nutrition optimization — cow profiles, breed selection, and diet generation',
+  });
+  registerTools(server);
+  return server;
+}
+
+function registerTools(mcpServer: InstanceType<typeof McpServer>): void {
 
 // =========================================================
 // TOOL 10: rationsmart.user.ensure
@@ -769,7 +776,7 @@ mcpServer.registerTool(
     description: `List follow-up check-ins that are due (scheduled_at <= now).
 Used by the scheduler to send proactive reminders.
 RETURNS: Array of { id, deviceId, dietId, scheduledAt }.`,
-    inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    inputSchema: z.object({}),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async () => {
@@ -789,13 +796,9 @@ RETURNS: Array of { id, deviceId, dietId, scheduledAt }.`,
 // TOOL 11: rationsmart.followups.complete
 // =========================================================
 
-const CompleteFollowUpSchema = {
-  type: 'object' as const,
-  properties: {
-    follow_up_id: { type: 'string' as const, description: 'The follow-up log ID to mark as completed' },
-  },
-  required: ['follow_up_id'],
-};
+const CompleteFollowUpSchema = z.object({
+  follow_up_id: z.string().min(1).describe('The follow-up log ID to mark as completed'),
+}).strict();
 
 mcpServer.registerTool(
   'rationsmart.followups.complete',
@@ -818,6 +821,8 @@ mcpServer.registerTool(
   },
 );
 
+} // end registerTools
+
 // ===========================================
 // MCP Endpoint
 // ===========================================
@@ -830,13 +835,10 @@ app.post('/mcp', authenticateMcp, async (req, res) => {
   try {
     const context: RequestContext = {};
     await requestContext.run(context, async () => {
+      const mcpServer = createMcpServer();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // Stateless
       });
-      // Close previous transport before connecting — singleton McpServer
-      // only supports one transport at a time. Without this, concurrent
-      // requests fail with "Already connected to a transport".
-      try { await mcpServer.close(); } catch { /* no-op on first request */ }
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     });
