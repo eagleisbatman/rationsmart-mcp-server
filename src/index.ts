@@ -1,8 +1,8 @@
 /**
  * RationSmart MCP Server
  *
- * Exposes 9 MCP tools for dairy cattle nutrition: country resolution, breed listing,
- * cow profile CRUD, diet optimization, follow-up management, and history.
+ * Exposes 12 MCP tools for dairy cattle nutrition: country resolution, breed listing,
+ * cow profile CRUD (create/update/delete), diet optimization, follow-up management, and history.
  *
  * Consumed by rationsmart-flow.ts in AI Services via the tool executor.
  * Response formats MUST match the parsers in rationsmart-flow.ts.
@@ -155,7 +155,10 @@ app.get('/', (_req, res) => {
       { name: 'rationsmart.breeds.list', description: 'List cattle breeds for a country' },
       { name: 'rationsmart.cows.list', description: 'List user cow profiles' },
       { name: 'rationsmart.cows.create', description: 'Create a cow profile' },
+      { name: 'rationsmart.cows.update', description: 'Update a cow profile' },
+      { name: 'rationsmart.cows.delete', description: 'Delete (deactivate) a cow profile' },
       { name: 'rationsmart.diets.generate', description: 'Generate optimized diet for a cow' },
+      { name: 'rationsmart.diets.regenerate', description: 'Regenerate diet with modifications' },
       { name: 'rationsmart.diets.follow', description: 'Start following a diet' },
       { name: 'rationsmart.diets.unfollow', description: 'Stop following a diet' },
       { name: 'rationsmart.diets.schedule.get', description: 'Get daily feeding schedule' },
@@ -213,6 +216,7 @@ const ResolveCountryInputSchema = z.object({
 
 const ListBreedsInputSchema = z.object({
   country_id: z.string().min(1).describe('Country UUID from rationsmart.countries.resolve'),
+  language: z.string().max(10).describe('Language code for localized breed names (e.g., "en", "am")').optional(),
 }).strict();
 
 const ListCowsInputSchema = z.object({
@@ -229,10 +233,39 @@ const CreateCowInputSchema = z.object({
   days_of_pregnancy: z.number().int().min(0).max(285).describe('Days of pregnancy (0 if not pregnant)'),
 }).strict();
 
+const UpdateCowInputSchema = z.object({
+  device_id: z.string().min(1).describe('GAP device ID identifying the user'),
+  cow_id: z.string().min(1).describe('Cow profile ID to update'),
+  name: z.string().min(1).max(50).describe('New name for the cow').optional(),
+  breed: z.string().min(1).describe('New breed name').optional(),
+  body_weight: z.number().min(20).max(2000).describe('Updated body weight in kg').optional(),
+  milk_production: z.number().min(0).max(100).describe('Updated daily milk in liters').optional(),
+  lactating: z.boolean().describe('Updated lactation status').optional(),
+  days_of_pregnancy: z.number().int().min(0).max(285).describe('Updated pregnancy days').optional(),
+  days_in_milk: z.number().int().min(0).max(1000).describe('Days in milk').optional(),
+  parity: z.number().int().min(0).max(20).describe('Number of calvings').optional(),
+}).strict();
+
+const DeleteCowInputSchema = z.object({
+  device_id: z.string().min(1).describe('GAP device ID identifying the user'),
+  cow_id: z.string().min(1).describe('Cow profile ID to delete'),
+}).strict();
+
 const GenerateDietInputSchema = z.object({
   device_id: z.string().min(1).describe('GAP device ID identifying the user'),
   cow_id: z.string().min(1).describe('Cow profile ID'),
   country_id: z.string().min(1).describe('Country UUID from rationsmart.countries.resolve'),
+  max_daily_cost: z.number().positive().describe('Maximum daily feed cost in local currency').optional(),
+  optimization_target: z.enum(['cost', 'nutrition', 'balanced']).describe('Optimization priority: minimize cost, maximize nutrition, or balance both').optional(),
+}).strict();
+
+const RegenerateDietInputSchema = z.object({
+  device_id: z.string().min(1).describe('GAP device ID identifying the user'),
+  cow_id: z.string().min(1).describe('Cow profile ID'),
+  country_id: z.string().min(1).describe('Country UUID from rationsmart.countries.resolve'),
+  exclude_feeds: z.array(z.string()).describe('Feed names to exclude from the new diet').optional(),
+  max_daily_cost: z.number().positive().describe('Maximum daily feed cost in local currency').optional(),
+  optimization_target: z.enum(['cost', 'nutrition', 'balanced']).describe('Optimization priority').optional(),
 }).strict();
 
 const FollowDietInputSchema = z.object({
@@ -375,7 +408,8 @@ COVERAGE: Per-country breed catalogs.`,
       if (breeds.length === 0) return textResponse('No breeds found for this country.');
 
       // Response format: "- BreedName" per line — parsed by parseBreeds() in rationsmart-flow.ts
-      const lines = breeds.map((b) => `- ${b.name}`);
+      // Include description when available for localization context
+      const lines = breeds.map((b) => b.description ? `- ${b.name} (${b.description})` : `- ${b.name}`);
       return textResponse(lines.join('\n'));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.breeds.list', { error: error instanceof Error ? error.message : String(error) });
@@ -461,7 +495,74 @@ COVERAGE: All RationSmart-supported countries.`,
 );
 
 // =========================================================
-// TOOL 5: rationsmart.diets.generate
+// TOOL 5: rationsmart.cows.update
+// =========================================================
+
+mcpServer.registerTool(
+  'rationsmart.cows.update',
+  {
+    title: 'Update Cow Profile',
+    description: `Update an existing cow profile (weight, milk production, pregnancy, etc.).
+TRIGGERS: "update cow", "change cow weight", "my cow is now dry".
+RETURNS: Updated cow profile.
+COVERAGE: Users with existing cow profiles.`,
+    inputSchema: UpdateCowInputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    try {
+      logger.info('rationsmart.cows.update called', { device_id: input.device_id, cow_id: input.cow_id });
+
+      if (!client) return errorResponse('Feed service is not configured.');
+
+      const { device_id, cow_id, ...updates } = input;
+
+      // At least one update field required
+      if (Object.keys(updates).length === 0) {
+        return errorResponse('At least one field to update is required.');
+      }
+
+      const cow = await client.updateCow(cow_id, device_id, updates);
+      return textResponse(`Updated cow '${cow.name}' (ID: ${cow.id})`);
+    } catch (error: unknown) {
+      logger.error('Error in rationsmart.cows.update', { error: error instanceof Error ? error.message : String(error) });
+      return errorResponse(`Could not update cow. ${error instanceof Error ? error.message : 'Try again in a moment.'}`);
+    }
+  },
+);
+
+// =========================================================
+// TOOL 6: rationsmart.cows.delete
+// =========================================================
+
+mcpServer.registerTool(
+  'rationsmart.cows.delete',
+  {
+    title: 'Delete Cow Profile',
+    description: `Soft-delete a cow profile (marks as inactive).
+TRIGGERS: "delete cow", "remove cow", "cow was sold".
+RETURNS: Confirmation of deletion.
+COVERAGE: Users with existing cow profiles.`,
+    inputSchema: DeleteCowInputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    try {
+      logger.info('rationsmart.cows.delete called', { device_id: input.device_id, cow_id: input.cow_id });
+
+      if (!client) return errorResponse('Feed service is not configured.');
+
+      await client.deleteCow(input.cow_id, input.device_id);
+      return textResponse(`Cow profile deleted (ID: ${input.cow_id})`);
+    } catch (error: unknown) {
+      logger.error('Error in rationsmart.cows.delete', { error: error instanceof Error ? error.message : String(error) });
+      return errorResponse(`Could not delete cow. ${error instanceof Error ? error.message : 'Try again in a moment.'}`);
+    }
+  },
+);
+
+// =========================================================
+// TOOL 7: rationsmart.diets.generate
 // =========================================================
 
 mcpServer.registerTool(
@@ -481,10 +582,19 @@ COVERAGE: Countries with RationSmart feed catalogs.`,
 
       if (!client) return errorResponse('Feed service is not configured.');
 
-      const result = await client.generateDiet(input.cow_id, input.country_id, input.device_id);
+      const constraints = (input.max_daily_cost || input.optimization_target)
+        ? { maxDailyCost: input.max_daily_cost, optimizationTarget: input.optimization_target }
+        : undefined;
+      const result = await client.generateDiet(input.cow_id, input.country_id, input.device_id, constraints);
 
-      // Response format: summary text containing "Diet saved (ID: uuid)" — parsed by parseDietId() in rationsmart-flow.ts
-      return textResponse(`${result.summary}\n\nDiet saved (ID: ${result.dietId})`);
+      // Return structured JSON for i18n — flow handler parses and passes to mobile renderer
+      return textResponse(JSON.stringify({
+        dietId: result.dietId,
+        totalCost: result.totalCost,
+        currency: result.currency,
+        feeds: result.feeds,
+        summary: result.summary,
+      }));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.diets.generate', { error: error instanceof Error ? error.message : String(error) });
       return errorResponse(`Could not generate diet. ${error instanceof Error ? error.message : 'Try again in a moment.'}`);
@@ -493,7 +603,42 @@ COVERAGE: Countries with RationSmart feed catalogs.`,
 );
 
 // =========================================================
-// TOOL 6: rationsmart.diets.follow
+// TOOL 8: rationsmart.diets.regenerate
+// =========================================================
+
+mcpServer.registerTool(
+  'rationsmart.diets.regenerate',
+  {
+    title: 'Regenerate Diet',
+    description: `Regenerate a diet with modifications — exclude feeds, reduce cost, change optimization target.
+TRIGGERS: "change the feed plan", "remove [ingredient]", "cheaper diet", "use less [feed name]".
+RETURNS: New optimized diet excluding specified feeds.
+COVERAGE: Users with existing cow profiles.`,
+    inputSchema: RegenerateDietInputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    try {
+      logger.info('rationsmart.diets.regenerate called', { device_id: input.device_id, cow_id: input.cow_id });
+
+      if (!client) return errorResponse('Feed service is not configured.');
+
+      const result = await client.regenerateDiet(input.cow_id, input.country_id, input.device_id, {
+        excludeFeeds: input.exclude_feeds,
+        maxDailyCost: input.max_daily_cost,
+        optimizationTarget: input.optimization_target,
+      });
+
+      return textResponse(`${result.summary}\n\nDiet saved (ID: ${result.dietId})`);
+    } catch (error: unknown) {
+      logger.error('Error in rationsmart.diets.regenerate', { error: error instanceof Error ? error.message : String(error) });
+      return errorResponse(`Could not regenerate diet. ${error instanceof Error ? error.message : 'Try again in a moment.'}`);
+    }
+  },
+);
+
+// =========================================================
+// TOOL 9: rationsmart.diets.follow
 // =========================================================
 
 mcpServer.registerTool(
@@ -513,8 +658,8 @@ COVERAGE: Users with diet recommendations.`,
 
       if (!client) return errorResponse('Feed service is not configured.');
 
-      const message = await client.followDiet(input.device_id, input.diet_id);
-      return textResponse(message);
+      const result = await client.followDiet(input.device_id, input.diet_id);
+      return textResponse(JSON.stringify(result));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.diets.follow', { error: error instanceof Error ? error.message : String(error) });
       return errorResponse('Could not start diet follow-up. Try again in a moment.');
@@ -543,8 +688,8 @@ COVERAGE: Users with active diet follow-ups.`,
 
       if (!client) return errorResponse('Feed service is not configured.');
 
-      const message = await client.unfollowDiet(input.device_id, input.diet_id);
-      return textResponse(message);
+      const result = await client.unfollowDiet(input.device_id, input.diet_id);
+      return textResponse(JSON.stringify(result));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.diets.unfollow', { error: error instanceof Error ? error.message : String(error) });
       return errorResponse('Could not stop diet follow-up. Try again in a moment.');
@@ -574,7 +719,8 @@ COVERAGE: Cows with active diet recommendations.`,
       if (!client) return errorResponse('Feed service is not configured.');
 
       const schedule = await client.getDietSchedule(input.device_id, input.cow_id);
-      return textResponse(schedule);
+      if (!schedule) return textResponse(JSON.stringify({ empty: true }));
+      return textResponse(JSON.stringify(schedule));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.diets.schedule.get', { error: error instanceof Error ? error.message : String(error) });
       return errorResponse('Could not load feeding schedule. Try again in a moment.');
@@ -604,10 +750,70 @@ COVERAGE: Users with cow profiles.`,
       if (!client) return errorResponse('Feed service is not configured.');
 
       const history = await client.listDietHistory(input.device_id, input.cow_id);
-      return textResponse(history);
+      return textResponse(JSON.stringify(history));
     } catch (error: unknown) {
       logger.error('Error in rationsmart.diets.history.list', { error: error instanceof Error ? error.message : String(error) });
       return errorResponse('Could not load diet history. Try again in a moment.');
+    }
+  },
+);
+
+// =========================================================
+// TOOL 10: rationsmart.followups.list_due
+// =========================================================
+
+mcpServer.registerTool(
+  'rationsmart.followups.list_due',
+  {
+    title: 'List Due Follow-ups',
+    description: `List follow-up check-ins that are due (scheduled_at <= now).
+Used by the scheduler to send proactive reminders.
+RETURNS: Array of { id, deviceId, dietId, scheduledAt }.`,
+    inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    try {
+      logger.info('rationsmart.followups.list_due called');
+      if (!client) return errorResponse('Feed service is not configured.');
+      const due = await client.listDueFollowUps();
+      return textResponse(JSON.stringify({ followUps: due }));
+    } catch (error: unknown) {
+      logger.error('Error in rationsmart.followups.list_due', { error: error instanceof Error ? error.message : String(error) });
+      return errorResponse('Could not list due follow-ups.');
+    }
+  },
+);
+
+// =========================================================
+// TOOL 11: rationsmart.followups.complete
+// =========================================================
+
+const CompleteFollowUpSchema = {
+  type: 'object' as const,
+  properties: {
+    follow_up_id: { type: 'string' as const, description: 'The follow-up log ID to mark as completed' },
+  },
+  required: ['follow_up_id'],
+};
+
+mcpServer.registerTool(
+  'rationsmart.followups.complete',
+  {
+    title: 'Complete Follow-up',
+    description: 'Mark a follow-up check-in as completed after sending notification.',
+    inputSchema: CompleteFollowUpSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    try {
+      logger.info('rationsmart.followups.complete called', { follow_up_id: input.follow_up_id });
+      if (!client) return errorResponse('Feed service is not configured.');
+      await client.completeFollowUp(input.follow_up_id);
+      return textResponse(JSON.stringify({ completed: true }));
+    } catch (error: unknown) {
+      logger.error('Error in rationsmart.followups.complete', { error: error instanceof Error ? error.message : String(error) });
+      return errorResponse('Could not complete follow-up.');
     }
   },
 );
@@ -627,6 +833,10 @@ app.post('/mcp', authenticateMcp, async (req, res) => {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // Stateless
       });
+      // Close previous transport before connecting — singleton McpServer
+      // only supports one transport at a time. Without this, concurrent
+      // requests fail with "Already connected to a transport".
+      await mcpServer.close();
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     });
@@ -661,11 +871,16 @@ const httpServer = app.listen(Number(PORT), HOST, () => {
       'rationsmart.breeds.list',
       'rationsmart.cows.list',
       'rationsmart.cows.create',
+      'rationsmart.cows.update',
+      'rationsmart.cows.delete',
       'rationsmart.diets.generate',
+      'rationsmart.diets.regenerate',
       'rationsmart.diets.follow',
       'rationsmart.diets.unfollow',
       'rationsmart.diets.schedule.get',
       'rationsmart.diets.history.list',
+      'rationsmart.followups.list_due',
+      'rationsmart.followups.complete',
     ],
   });
 });
