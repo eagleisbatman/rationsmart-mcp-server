@@ -836,7 +836,7 @@ app.post('/mcp', authenticateMcp, async (req, res) => {
       // Close previous transport before connecting — singleton McpServer
       // only supports one transport at a time. Without this, concurrent
       // requests fail with "Already connected to a transport".
-      await mcpServer.close();
+      try { await mcpServer.close(); } catch { /* no-op on first request */ }
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     });
